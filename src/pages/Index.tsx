@@ -2,6 +2,7 @@ import HeroSection from "@/components/HeroSection";
 import WhatIsSection from "@/components/WhatIsSection";
 import HowItWorksSection from "@/components/HowItWorksSection";
 import FinalSection from "@/components/FinalSection";
+import TournamentView from "@/components/TournamentView";
 
 const Index = () => {
   return (
@@ -9,6 +10,7 @@ const Index = () => {
       <HeroSection />
       <WhatIsSection />
       <HowItWorksSection />
+      <TournamentView />
       <FinalSection />
     </main>
   );
