@@ -56,7 +56,7 @@ const DEMatchCard = ({ match, onSubmitResult }: DEMatchCardProps) => {
                 {teamA ? `#${teamA.seed} ${teamA.name}` : "A definir"}
               </span>
               <div className="flex items-center gap-1">
-                {match.goldenGoal === "a" && <Zap className="w-4 h-4 text-yellow-400" title="Golden Goal" />}
+                {match.goldenGoal === "a" && <Zap className="w-4 h-4 text-accent" />}
                 <span className="font-display text-xl">{match.scoreA ?? 0}</span>
               </div>
             </div>
@@ -68,7 +68,7 @@ const DEMatchCard = ({ match, onSubmitResult }: DEMatchCardProps) => {
                 {teamB ? `#${teamB.seed} ${teamB.name}` : "A definir"}
               </span>
               <div className="flex items-center gap-1">
-                {match.goldenGoal === "b" && <Zap className="w-4 h-4 text-yellow-400" title="Golden Goal" />}
+                {match.goldenGoal === "b" && <Zap className="w-4 h-4 text-accent" />}
                 <span className="font-display text-xl">{match.scoreB ?? 0}</span>
               </div>
             </div>
