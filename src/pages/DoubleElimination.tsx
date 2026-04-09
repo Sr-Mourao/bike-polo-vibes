@@ -1,33 +1,60 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Link } from "react-router-dom";
+import { Zap } from "lucide-react";
 import {
-  generateTeams,
+  storedToTeams,
   initTournament,
   submitGroupResult,
   startDoubleElimination,
-  selectWinner,
+  selectWinnerWithScore,
   type Tournament,
   type GroupMatch,
+  type Match,
+  type StoredTeam,
+  type TournamentConfig as TConfig,
 } from "@/lib/tournament";
-import MatchCard from "@/components/MatchCard";
+import DEMatchCard from "@/components/DEMatchCard";
+import TeamRegistration from "@/components/TeamRegistration";
+import TournamentConfigComponent from "@/components/TournamentConfig";
+
+type Phase = "register" | "config" | "tournament";
 
 const DoubleEliminationPage = () => {
+  const [phase, setPhase] = useState<Phase>("register");
+  const [storedTeams, setStoredTeams] = useState<StoredTeam[]>([]);
   const [tournament, setTournament] = useState<Tournament | null>(null);
-  const [scores, setScores] = useState<Record<string, { a: string; b: string }>>({});
+  const [scores, setScores] = useState<Record<string, { a: string; b: string; gg: "a" | "b" | null }>>({});
 
-  const handleCreate = () => {
-    const teams = generateTeams();
-    setTournament(initTournament(teams));
-    setScores({});
+  const handleTeamsReady = (teams: StoredTeam[]) => {
+    setStoredTeams(teams);
+    setPhase("config");
   };
 
-  const handleReset = () => { setTournament(null); setScores({}); };
+  const handleStartTournament = (config: TConfig) => {
+    const teams = storedToTeams(storedTeams);
+    setTournament(initTournament(teams, config));
+    setScores({});
+    setPhase("tournament");
+  };
+
+  const handleReset = () => {
+    setTournament(null);
+    setScores({});
+    setPhase("register");
+  };
 
   const handleScoreChange = (matchId: string, side: "a" | "b", value: string) => {
     setScores(prev => ({
       ...prev,
-      [matchId]: { ...prev[matchId], [side]: value },
+      [matchId]: { ...prev[matchId], gg: prev[matchId]?.gg ?? null, [side]: value },
+    }));
+  };
+
+  const handleGoldenGoalChange = (matchId: string, side: "a" | "b" | null) => {
+    setScores(prev => ({
+      ...prev,
+      [matchId]: { ...prev[matchId], a: prev[matchId]?.a ?? "", b: prev[matchId]?.b ?? "", gg: side },
     }));
   };
 
@@ -37,7 +64,7 @@ const DoubleEliminationPage = () => {
     if (!s || s.a === "" || s.b === "" || s.a === undefined || s.b === undefined) return;
     const a = parseInt(s.a); const b = parseInt(s.b);
     if (isNaN(a) || isNaN(b) || a < 0 || b < 0) return;
-    setTournament(submitGroupResult(tournament, matchId, a, b));
+    setTournament(submitGroupResult(tournament, matchId, a, b, s.gg));
   };
 
   const handleStartDE = () => {
@@ -45,14 +72,13 @@ const DoubleEliminationPage = () => {
     setTournament(startDoubleElimination(tournament));
   };
 
-  const handleSelectWinner = (matchId: string, teamId: number) => {
+  const handleSubmitDEResult = (matchId: string, winnerId: number, scoreA: number, scoreB: number, goldenGoal?: "a" | "b" | null) => {
     if (!tournament) return;
-    setTournament(selectWinner(tournament, matchId, teamId));
+    setTournament(selectWinnerWithScore(tournament, matchId, winnerId, scoreA, scoreB, goldenGoal));
   };
 
   return (
     <div className="min-h-screen bg-primary text-primary-foreground">
-      {/* Header */}
       <header className="border-b-4 border-secondary">
         <div className="container mx-auto px-6 py-4 flex items-center justify-between">
           <Link to="/" className="font-display text-3xl hover:text-secondary transition-colors">
@@ -63,18 +89,19 @@ const DoubleEliminationPage = () => {
       </header>
 
       <div className="container mx-auto px-6 py-10">
-        {!tournament ? (
-          <div className="text-center py-32">
-            <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              onClick={handleCreate}
-              className="px-10 py-6 bg-secondary text-secondary-foreground font-heading text-3xl md:text-5xl uppercase tracking-wider border-4 border-secondary-foreground/20 hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              Criar Double Elimination 🏆
-            </motion.button>
-          </div>
-        ) : (
+        {phase === "register" && (
+          <TeamRegistration onStartTournament={handleTeamsReady} />
+        )}
+
+        {phase === "config" && (
+          <TournamentConfigComponent
+            teams={storedTeams}
+            onStart={handleStartTournament}
+            onBack={() => setPhase("register")}
+          />
+        )}
+
+        {phase === "tournament" && tournament && (
           <>
             <div className="flex justify-end mb-8">
               <button
@@ -85,7 +112,6 @@ const DoubleEliminationPage = () => {
               </button>
             </div>
 
-            {/* Champion banner */}
             <AnimatePresence>
               {tournament.champion && (
                 <motion.div
@@ -102,7 +128,7 @@ const DoubleEliminationPage = () => {
 
             {/* Teams */}
             <section className="mb-12">
-              <h2 className="text-4xl font-display mb-6">TIMES</h2>
+              <h2 className="text-4xl font-display mb-6">TIMES ({tournament.teams.length})</h2>
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
                 {tournament.teams.map(team => (
                   <div key={team.id} className={`p-3 border-2 border-border bg-card text-card-foreground ${team.eliminated ? "opacity-30" : ""}`}>
@@ -113,18 +139,17 @@ const DoubleEliminationPage = () => {
               </div>
             </section>
 
-            {/* Group Phase */}
             {!tournament.groupPhaseComplete || tournament.upperBracket.length === 0 ? (
               <GroupPhase
                 tournament={tournament}
                 scores={scores}
                 onScoreChange={handleScoreChange}
+                onGoldenGoalChange={handleGoldenGoalChange}
                 onSubmit={handleSubmitGroup}
                 onStartDE={handleStartDE}
               />
             ) : (
-              /* Double Elimination Phase */
-              <DEPhase tournament={tournament} onSelectWinner={handleSelectWinner} />
+              <DEPhase tournament={tournament} onSubmitResult={handleSubmitDEResult} />
             )}
           </>
         )}
@@ -135,15 +160,12 @@ const DoubleEliminationPage = () => {
 
 /* ─── Group Phase ─── */
 function GroupPhase({
-  tournament,
-  scores,
-  onScoreChange,
-  onSubmit,
-  onStartDE,
+  tournament, scores, onScoreChange, onGoldenGoalChange, onSubmit, onStartDE,
 }: {
   tournament: Tournament;
-  scores: Record<string, { a: string; b: string }>;
+  scores: Record<string, { a: string; b: string; gg: "a" | "b" | null }>;
   onScoreChange: (id: string, side: "a" | "b", val: string) => void;
+  onGoldenGoalChange: (id: string, side: "a" | "b" | null) => void;
   onSubmit: (id: string) => void;
   onStartDE: () => void;
 }) {
@@ -152,7 +174,6 @@ function GroupPhase({
 
   return (
     <>
-      {/* Classification Table */}
       <section className="mb-12">
         <h2 className="text-4xl font-display mb-6">CLASSIFICAÇÃO</h2>
         <div className="overflow-x-auto">
@@ -172,37 +193,45 @@ function GroupPhase({
               </tr>
             </thead>
             <tbody>
-              {tournament.standings.map((s, i) => (
-                <motion.tr
-                  key={s.team.id}
-                  initial={{ x: -20, opacity: 0 }}
-                  animate={{ x: 0, opacity: 1 }}
-                  transition={{ delay: i * 0.03 }}
-                  className={`border-t border-border font-heading text-lg ${
-                    i < 2 ? "bg-secondary/20" : ""
-                  }`}
-                >
-                  <td className="p-3 font-display text-xl">{i + 1}</td>
-                  <td className="p-3">{s.team.name}</td>
-                  <td className="p-3 text-center">{s.played}</td>
-                  <td className="p-3 text-center">{s.wins}</td>
-                  <td className="p-3 text-center">{s.draws}</td>
-                  <td className="p-3 text-center">{s.losses}</td>
-                  <td className="p-3 text-center">{s.goalsFor}</td>
-                  <td className="p-3 text-center">{s.goalsAgainst}</td>
-                  <td className="p-3 text-center">{s.goalDiff > 0 ? `+${s.goalDiff}` : s.goalDiff}</td>
-                  <td className="p-3 text-center font-display text-2xl text-secondary">{s.points}</td>
-                </motion.tr>
-              ))}
+              {tournament.standings.map((s, i) => {
+                const eliminated = tournament.config.enableGroupElimination &&
+                  i >= tournament.standings.length - tournament.config.eliminationCount;
+                return (
+                  <motion.tr
+                    key={s.team.id}
+                    initial={{ x: -20, opacity: 0 }}
+                    animate={{ x: 0, opacity: 1 }}
+                    transition={{ delay: i * 0.03 }}
+                    className={`border-t border-border font-heading text-lg ${
+                      i < 2 ? "bg-secondary/20" : ""
+                    } ${eliminated ? "opacity-40 bg-destructive/10" : ""}`}
+                  >
+                    <td className="p-3 font-display text-xl">{i + 1}</td>
+                    <td className="p-3">
+                      {s.team.name}
+                      {eliminated && <span className="ml-2 text-xs text-destructive">ELIMINADO</span>}
+                    </td>
+                    <td className="p-3 text-center">{s.played}</td>
+                    <td className="p-3 text-center">{s.wins}</td>
+                    <td className="p-3 text-center">{s.draws}</td>
+                    <td className="p-3 text-center">{s.losses}</td>
+                    <td className="p-3 text-center">{s.goalsFor}</td>
+                    <td className="p-3 text-center">{s.goalsAgainst}</td>
+                    <td className="p-3 text-center">{s.goalDiff > 0 ? `+${s.goalDiff}` : s.goalDiff}</td>
+                    <td className="p-3 text-center font-display text-2xl text-secondary">{s.points}</td>
+                  </motion.tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
         <p className="text-sm text-muted-foreground mt-2">
-          Vitória = 3 pts · Empate = 1 pt · Derrota = 0 pts · Top 2 com bye na 1ª rodada do DE
+          Vitória = 3 pts · Empate = 1 pt · Derrota = 0 pts
+          {tournament.config.enableGroupElimination &&
+            ` · Últimos ${tournament.config.eliminationCount} eliminados`}
         </p>
       </section>
 
-      {/* Group matches */}
       <section className="mb-12">
         <h2 className="text-4xl font-display mb-6">RODADAS</h2>
 
@@ -214,7 +243,9 @@ function GroupPhase({
                 match={m}
                 scoreA={scores[m.id]?.a ?? ""}
                 scoreB={scores[m.id]?.b ?? ""}
+                goldenGoal={scores[m.id]?.gg ?? null}
                 onScoreChange={onScoreChange}
+                onGoldenGoalChange={onGoldenGoalChange}
                 onSubmit={onSubmit}
               />
             ))}
@@ -228,8 +259,10 @@ function GroupPhase({
               {playedMatches.map(m => (
                 <div key={m.id} className="p-3 border border-border bg-card text-card-foreground flex items-center justify-between">
                   <span className="font-heading">{m.teamA.name}</span>
-                  <span className="font-display text-2xl mx-3">
+                  <span className="font-display text-2xl mx-3 flex items-center gap-1">
+                    {m.goldenGoal === "a" && <Zap className="w-4 h-4 text-accent" />}
                     {m.scoreA} <span className="text-muted-foreground text-lg">x</span> {m.scoreB}
+                    {m.goldenGoal === "b" && <Zap className="w-4 h-4 text-accent" />}
                   </span>
                   <span className="font-heading">{m.teamB.name}</span>
                 </div>
@@ -239,7 +272,6 @@ function GroupPhase({
         )}
       </section>
 
-      {/* Start DE button */}
       {tournament.groupPhaseComplete && (
         <div className="text-center py-8">
           <motion.button
@@ -257,16 +289,14 @@ function GroupPhase({
 }
 
 function GroupMatchCard({
-  match,
-  scoreA,
-  scoreB,
-  onScoreChange,
-  onSubmit,
+  match, scoreA, scoreB, goldenGoal, onScoreChange, onGoldenGoalChange, onSubmit,
 }: {
   match: GroupMatch;
   scoreA: string;
   scoreB: string;
+  goldenGoal: "a" | "b" | null;
   onScoreChange: (id: string, side: "a" | "b", val: string) => void;
+  onGoldenGoalChange: (id: string, side: "a" | "b" | null) => void;
   onSubmit: (id: string) => void;
 }) {
   return (
@@ -295,6 +325,29 @@ function GroupMatchCard({
           placeholder="0"
         />
       </div>
+
+      {/* Golden Goal */}
+      <div className="mt-3 flex items-center justify-center gap-2">
+        <Zap className="w-4 h-4 text-accent" />
+        <span className="text-xs font-heading text-muted-foreground uppercase">GG:</span>
+        <button
+          onClick={() => onGoldenGoalChange(match.id, goldenGoal === "a" ? null : "a")}
+          className={`px-2 py-1 text-xs font-heading border transition-colors ${
+            goldenGoal === "a" ? "bg-accent/20 border-accent text-accent" : "border-border text-muted-foreground hover:border-accent/50"
+          }`}
+        >
+          {match.teamA.name}
+        </button>
+        <button
+          onClick={() => onGoldenGoalChange(match.id, goldenGoal === "b" ? null : "b")}
+          className={`px-2 py-1 text-xs font-heading border transition-colors ${
+            goldenGoal === "b" ? "bg-accent/20 border-accent text-accent" : "border-border text-muted-foreground hover:border-accent/50"
+          }`}
+        >
+          {match.teamB.name}
+        </button>
+      </div>
+
       <button
         onClick={() => onSubmit(match.id)}
         className="w-full mt-3 py-2 bg-secondary text-secondary-foreground font-heading text-lg uppercase tracking-wider hover:bg-accent hover:text-accent-foreground transition-colors"
@@ -306,24 +359,27 @@ function GroupMatchCard({
 }
 
 /* ─── Double Elimination Phase ─── */
-function DEPhase({ tournament, onSelectWinner }: { tournament: Tournament; onSelectWinner: (matchId: string, teamId: number) => void }) {
-  const upperR1 = tournament.upperBracket.filter(m => m.id.startsWith("U1"));
-  const upperR2 = tournament.upperBracket.filter(m => m.id.startsWith("U2"));
-  const upperSemi = tournament.upperBracket.filter(m => m.id === "U3-1");
-  const upperFinal = tournament.upperBracket.filter(m => m.id === "U4-1");
+function DEPhase({ tournament, onSubmitResult }: {
+  tournament: Tournament;
+  onSubmitResult: (matchId: string, winnerId: number, scoreA: number, scoreB: number, goldenGoal?: "a" | "b" | null) => void;
+}) {
+  // Group matches by round for UB and LB
+  const ubRounds: Record<number, typeof tournament.upperBracket> = {};
+  tournament.upperBracket.forEach(m => {
+    if (!ubRounds[m.round]) ubRounds[m.round] = [];
+    ubRounds[m.round].push(m);
+  });
 
-  const lowerR1 = tournament.lowerBracket.filter(m => m.id.startsWith("L1"));
-  const lowerR2 = tournament.lowerBracket.filter(m => m.id.startsWith("L2"));
-  const lowerR3 = tournament.lowerBracket.filter(m => m.id === "L3-1");
-  const lowerR4 = tournament.lowerBracket.filter(m => m.id === "L4-1");
-  const lowerSemi = tournament.lowerBracket.filter(m => m.id === "L5-1");
-  const lowerFinal = tournament.lowerBracket.filter(m => m.id === "L6-1");
+  const lbRounds: Record<number, typeof tournament.lowerBracket> = {};
+  tournament.lowerBracket.forEach(m => {
+    if (!lbRounds[m.round]) lbRounds[m.round] = [];
+    lbRounds[m.round].push(m);
+  });
 
   const needsReset = tournament.grandFinal?.winner && tournament.grandFinalReset?.teamA;
 
   return (
     <>
-      {/* Standings snapshot */}
       <section className="mb-12">
         <h2 className="text-4xl font-display mb-4">CLASSIFICAÇÃO FINAL</h2>
         <div className="overflow-x-auto">
@@ -337,24 +393,27 @@ function DEPhase({ tournament, onSelectWinner }: { tournament: Tournament; onSel
               </tr>
             </thead>
             <tbody>
-              {tournament.standings.map((s, i) => (
-                <tr key={s.team.id} className={`border-t border-border font-heading text-lg ${i < 2 ? "bg-secondary/20" : ""}`}>
-                  <td className="p-3 font-display">{i + 1}</td>
-                  <td className="p-3">{s.team.name}</td>
-                  <td className="p-3 text-center font-display text-xl text-secondary">{s.points}</td>
-                  <td className="p-3 text-center">{s.goalDiff > 0 ? `+${s.goalDiff}` : s.goalDiff}</td>
-                </tr>
-              ))}
+              {tournament.standings.map((s, i) => {
+                const eliminated = tournament.config.enableGroupElimination &&
+                  i >= tournament.standings.length - tournament.config.eliminationCount;
+                return (
+                  <tr key={s.team.id} className={`border-t border-border font-heading text-lg ${i < 2 ? "bg-secondary/20" : ""} ${eliminated ? "opacity-40 line-through" : ""}`}>
+                    <td className="p-3 font-display">{i + 1}</td>
+                    <td className="p-3">{s.team.name}</td>
+                    <td className="p-3 text-center font-display text-xl text-secondary">{s.points}</td>
+                    <td className="p-3 text-center">{s.goalDiff > 0 ? `+${s.goalDiff}` : s.goalDiff}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       </section>
 
-      {/* DE Teams status */}
       <section className="mb-12">
         <h2 className="text-4xl font-display mb-4">STATUS</h2>
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-          {tournament.teams.map(t => (
+          {tournament.teams.filter(t => !t.eliminated || t.losses > 0).map(t => (
             <div key={t.id} className={`p-2 border border-border bg-card text-card-foreground text-sm ${t.eliminated ? "opacity-30 line-through" : ""} ${t.losses === 1 ? "border-destructive" : ""}`}>
               <span className="font-heading">#{t.seed} {t.name}</span>
               {t.losses > 0 && <span className="text-destructive ml-1 text-xs font-bold">{t.losses}L</span>}
@@ -367,10 +426,14 @@ function DEPhase({ tournament, onSelectWinner }: { tournament: Tournament; onSel
       <section className="mb-12">
         <h2 className="text-4xl font-display mb-6 text-secondary">▲ UPPER BRACKET</h2>
         <div className="flex flex-wrap gap-8 items-start">
-          <BracketRound label="Rodada 1" matches={upperR1} onSelect={onSelectWinner} />
-          <BracketRound label="Rodada 2" matches={upperR2} onSelect={onSelectWinner} />
-          <BracketRound label="Semi" matches={upperSemi} onSelect={onSelectWinner} />
-          <BracketRound label="Final UB" matches={upperFinal} onSelect={onSelectWinner} />
+          {Object.keys(ubRounds).sort((a, b) => Number(a) - Number(b)).map(round => (
+            <BracketRound
+              key={`ub-${round}`}
+              label={`UB Rodada ${round}`}
+              matches={ubRounds[Number(round)]}
+              onSubmitResult={onSubmitResult}
+            />
+          ))}
         </div>
       </section>
 
@@ -378,12 +441,14 @@ function DEPhase({ tournament, onSelectWinner }: { tournament: Tournament; onSel
       <section className="mb-12">
         <h2 className="text-4xl font-display mb-6 text-accent">▼ LOWER BRACKET</h2>
         <div className="flex flex-wrap gap-8 items-start">
-          <BracketRound label="LB R1" matches={lowerR1} onSelect={onSelectWinner} />
-          <BracketRound label="LB R2" matches={lowerR2} onSelect={onSelectWinner} />
-          <BracketRound label="LB R3" matches={lowerR3} onSelect={onSelectWinner} />
-          <BracketRound label="LB R4" matches={lowerR4} onSelect={onSelectWinner} />
-          <BracketRound label="LB Semi" matches={lowerSemi} onSelect={onSelectWinner} />
-          <BracketRound label="LB Final" matches={lowerFinal} onSelect={onSelectWinner} />
+          {Object.keys(lbRounds).sort((a, b) => Number(a) - Number(b)).map(round => (
+            <BracketRound
+              key={`lb-${round}`}
+              label={`LB Rodada ${round}`}
+              matches={lbRounds[Number(round)]}
+              onSubmitResult={onSubmitResult}
+            />
+          ))}
         </div>
       </section>
 
@@ -391,24 +456,28 @@ function DEPhase({ tournament, onSelectWinner }: { tournament: Tournament; onSel
       <section className="mb-12">
         <h2 className="text-4xl font-display mb-6">🏁 GRANDE FINAL</h2>
         <div className="flex flex-wrap gap-8 items-start">
-          {tournament.grandFinal && <BracketRound label="Grande Final" matches={[tournament.grandFinal]} onSelect={onSelectWinner} />}
-          {needsReset && tournament.grandFinalReset && <BracketRound label="Final Reset" matches={[tournament.grandFinalReset]} onSelect={onSelectWinner} />}
+          {tournament.grandFinal && (
+            <BracketRound label="Grande Final" matches={[tournament.grandFinal]} onSubmitResult={onSubmitResult} />
+          )}
+          {needsReset && tournament.grandFinalReset && (
+            <BracketRound label="Final Reset" matches={[tournament.grandFinalReset]} onSubmitResult={onSubmitResult} />
+          )}
         </div>
       </section>
     </>
   );
 }
 
-function BracketRound({ label, matches, onSelect }: {
+function BracketRound({ label, matches, onSubmitResult }: {
   label: string;
-  matches: any[];
-  onSelect: (matchId: string, teamId: number) => void;
+  matches: Match[];
+  onSubmitResult: (matchId: string, winnerId: number, scoreA: number, scoreB: number, goldenGoal?: "a" | "b" | null) => void;
 }) {
   return (
     <div className="flex flex-col gap-4">
       <span className="text-sm font-heading tracking-widest text-muted-foreground uppercase">{label}</span>
-      {matches.map((m: any) => (
-        <MatchCard key={m.id} match={m} onSelectWinner={onSelect} />
+      {matches.map(m => (
+        <DEMatchCard key={m.id} match={m} onSubmitResult={onSubmitResult} />
       ))}
     </div>
   );

@@ -20,6 +20,7 @@ export interface GroupMatch {
   scoreA: number | null;
   scoreB: number | null;
   played: boolean;
+  goldenGoal?: "a" | "b" | null; // which side scored golden goal
 }
 
 export interface Standing {
@@ -42,10 +43,19 @@ export interface Match {
   teamB: Team | null;
   winner: Team | null;
   loser: Team | null;
+  scoreA?: number | null;
+  scoreB?: number | null;
+  goldenGoal?: "a" | "b" | null;
+}
+
+export interface TournamentConfig {
+  enableGroupElimination: boolean;
+  eliminationCount: 2 | 4; // how many teams eliminated from groups
 }
 
 export interface Tournament {
   teams: Team[];
+  config: TournamentConfig;
   groupMatches: GroupMatch[];
   standings: Standing[];
   groupPhaseComplete: boolean;
@@ -56,44 +66,41 @@ export interface Tournament {
   champion: Team | null;
 }
 
-const TEAM_NAMES = [
-  "Pedal Fury", "Chain Breakers", "Spoke Demons", "Crank Lords", "Wheel Wolves",
-  "Saddle Sharks", "Hub Hustlers", "Gear Ghosts", "Rim Reapers", "Axle Assassins",
-  "Brake Bandits", "Tire Titans", "Frame Fighters", "Bar Brawlers", "Stem Strikers",
-];
+// ─── localStorage helpers ───
 
-const PLAYER_NAMES = [
-  "Lucas", "Pedro", "João", "Mateus", "Rafael", "Bruno", "Felipe", "Thiago",
-  "Gustavo", "André", "Carlos", "Diego", "Eduardo", "Fábio", "Gabriel",
-  "Henrique", "Igor", "Julio", "Kaio", "Leandro", "Marcos", "Nicolas",
-  "Otávio", "Paulo", "Renato", "Samuel", "Tiago", "Vinícius", "Wagner", "Yuri",
-  "Ana", "Beatriz", "Camila", "Daniela", "Elena", "Fernanda", "Gisele",
-  "Helena", "Isabela", "Juliana",
-];
+const STORAGE_KEY = "bikepolo_teams";
 
-function shuffle<T>(arr: T[]): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
+export interface StoredTeam {
+  id: number;
+  name: string;
+  players: string[];
 }
 
-export function generateTeams(): Team[] {
-  const names = shuffle(TEAM_NAMES).slice(0, 10);
-  const players = shuffle(PLAYER_NAMES);
-  let pi = 0;
-
-  return names.map((name, i) => {
-    const count = 3 + Math.floor(Math.random() * 2);
-    const teamPlayers = players.slice(pi, pi + count).map(n => ({ name: n }));
-    pi += count;
-    return { id: i + 1, name, players: teamPlayers, losses: 0, eliminated: false, seed: i + 1 };
-  });
+export function loadTeamsFromStorage(): StoredTeam[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch { return []; }
 }
 
-// Generate round-robin group matches
+export function saveTeamsToStorage(teams: StoredTeam[]) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(teams));
+}
+
+export function storedToTeams(stored: StoredTeam[]): Team[] {
+  return stored.map((s, i) => ({
+    id: s.id,
+    name: s.name,
+    players: s.players.map(n => ({ name: n })),
+    losses: 0,
+    eliminated: false,
+    seed: i + 1,
+  }));
+}
+
+// ─── Group matches ───
+
 export function generateGroupMatches(teams: Team[]): GroupMatch[] {
   const matches: GroupMatch[] = [];
   let id = 1;
@@ -106,6 +113,7 @@ export function generateGroupMatches(teams: Team[]): GroupMatch[] {
         scoreA: null,
         scoreB: null,
         played: false,
+        goldenGoal: null,
       });
     }
   }
@@ -137,12 +145,13 @@ export function computeStandings(teams: Team[], matches: GroupMatch[]): Standing
   );
 }
 
-export function initTournament(teams: Team[]): Tournament {
+export function initTournament(teams: Team[], config: TournamentConfig): Tournament {
   const groupMatches = generateGroupMatches(teams);
   const standings = computeStandings(teams, groupMatches);
 
   return {
     teams,
+    config,
     groupMatches,
     standings,
     groupPhaseComplete: false,
@@ -154,16 +163,20 @@ export function initTournament(teams: Team[]): Tournament {
   };
 }
 
-export function submitGroupResult(tournament: Tournament, matchId: string, scoreA: number, scoreB: number): Tournament {
+export function submitGroupResult(
+  tournament: Tournament, matchId: string,
+  scoreA: number, scoreB: number,
+  goldenGoal?: "a" | "b" | null
+): Tournament {
   const t = JSON.parse(JSON.stringify(tournament)) as Tournament;
   const match = t.groupMatches.find(m => m.id === matchId);
   if (!match || match.played) return t;
   match.scoreA = scoreA;
   match.scoreB = scoreB;
   match.played = true;
+  match.goldenGoal = goldenGoal || null;
   t.standings = computeStandings(t.teams, t.groupMatches);
 
-  // Check if all group matches played
   if (t.groupMatches.every(m => m.played)) {
     t.groupPhaseComplete = true;
   }
@@ -171,51 +184,141 @@ export function submitGroupResult(tournament: Tournament, matchId: string, score
   return t;
 }
 
+// ─── Dynamic Double Elimination bracket generation ───
+
+function nextPowerOf2(n: number): number {
+  let p = 1;
+  while (p < n) p *= 2;
+  return p;
+}
+
 export function startDoubleElimination(tournament: Tournament): Tournament {
   const t = JSON.parse(JSON.stringify(tournament)) as Tournament;
   if (!t.groupPhaseComplete) return t;
 
-  // Use standings to seed: top 10 ranked
-  const ranked = t.standings.map((s, i) => ({ ...s.team, seed: i + 1, losses: 0, eliminated: false }));
-  t.teams = ranked;
+  // Determine qualified teams
+  let qualifiedCount = t.standings.length;
+  if (t.config.enableGroupElimination) {
+    qualifiedCount = Math.max(4, t.standings.length - t.config.eliminationCount);
+  }
+  const qualified = t.standings.slice(0, qualifiedCount).map((s, i) => ({
+    ...s.team, seed: i + 1, losses: 0, eliminated: false,
+  }));
 
-  // UB R1: 3v7, 4v8, 5v9, 6v10 — seeds 1,2 get bye
-  const upper1: Match[] = [
-    { id: "U1-1", round: 1, bracket: "upper", teamA: ranked[2], teamB: ranked[6], winner: null, loser: null },
-    { id: "U1-2", round: 1, bracket: "upper", teamA: ranked[3], teamB: ranked[7], winner: null, loser: null },
-    { id: "U1-3", round: 1, bracket: "upper", teamA: ranked[4], teamB: ranked[8], winner: null, loser: null },
-    { id: "U1-4", round: 1, bracket: "upper", teamA: ranked[5], teamB: ranked[9], winner: null, loser: null },
-  ];
-  const upper2: Match[] = [
-    { id: "U2-1", round: 2, bracket: "upper", teamA: ranked[0], teamB: null, winner: null, loser: null },
-    { id: "U2-2", round: 2, bracket: "upper", teamA: ranked[1], teamB: null, winner: null, loser: null },
-    { id: "U2-3", round: 2, bracket: "upper", teamA: null, teamB: null, winner: null, loser: null },
-  ];
-  const upperSemi: Match = { id: "U3-1", round: 3, bracket: "upper", teamA: null, teamB: null, winner: null, loser: null };
-  const upperFinal: Match = { id: "U4-1", round: 4, bracket: "upper", teamA: null, teamB: null, winner: null, loser: null };
+  // Mark eliminated teams
+  t.teams = t.standings.map((s, i) => {
+    const team = { ...s.team, seed: i + 1, losses: 0, eliminated: false };
+    if (i >= qualifiedCount) team.eliminated = true;
+    return team;
+  });
 
-  const lower1: Match[] = [
-    { id: "L1-1", round: 1, bracket: "lower", teamA: null, teamB: null, winner: null, loser: null },
-    { id: "L1-2", round: 1, bracket: "lower", teamA: null, teamB: null, winner: null, loser: null },
-  ];
-  const lower2: Match[] = [
-    { id: "L2-1", round: 2, bracket: "lower", teamA: null, teamB: null, winner: null, loser: null },
-    { id: "L2-2", round: 2, bracket: "lower", teamA: null, teamB: null, winner: null, loser: null },
-  ];
-  const lower3: Match = { id: "L3-1", round: 3, bracket: "lower", teamA: null, teamB: null, winner: null, loser: null };
-  const lower4: Match = { id: "L4-1", round: 4, bracket: "lower", teamA: null, teamB: null, winner: null, loser: null };
-  const lowerSemi: Match = { id: "L5-1", round: 5, bracket: "lower", teamA: null, teamB: null, winner: null, loser: null };
-  const lowerFinal: Match = { id: "L6-1", round: 6, bracket: "lower", teamA: null, teamB: null, winner: null, loser: null };
+  const n = qualified.length;
+  const bracketSize = nextPowerOf2(n);
+  const byeCount = bracketSize - n;
 
-  t.upperBracket = [...upper1, ...upper2, upperSemi, upperFinal];
-  t.lowerBracket = [...lower1, ...lower2, lower3, lower4, lowerSemi, lowerFinal];
+  // Build UB R1 pairings using standard seeding (1vN, 2v(N-1), etc.)
+  const r1MatchCount = bracketSize / 2;
+  const ubR1: Match[] = [];
+  const byeWinners: { team: Team; targetR2Index: number }[] = [];
+
+  for (let i = 0; i < r1MatchCount; i++) {
+    const seedA = i + 1;
+    const seedB = bracketSize - i;
+    const teamA = seedA <= n ? qualified[seedA - 1] : null;
+    const teamB = seedB <= n ? qualified[seedB - 1] : null;
+
+    if (teamA && teamB) {
+      ubR1.push({
+        id: `U1-${i + 1}`, round: 1, bracket: "upper",
+        teamA, teamB, winner: null, loser: null,
+      });
+    } else if (teamA) {
+      // Bye — teamA advances directly
+      byeWinners.push({ team: teamA, targetR2Index: Math.floor(i / 2) });
+    }
+  }
+
+  // Build subsequent UB rounds
+  let currentMatchCount = r1MatchCount / 2;
+  let ubRound = 2;
+  const ubRounds: Match[][] = [ubR1];
+
+  while (currentMatchCount >= 1) {
+    const round: Match[] = [];
+    for (let i = 0; i < currentMatchCount; i++) {
+      round.push({
+        id: `U${ubRound}-${i + 1}`, round: ubRound, bracket: "upper",
+        teamA: null, teamB: null, winner: null, loser: null,
+      });
+    }
+    ubRounds.push(round);
+    currentMatchCount /= 2;
+    ubRound++;
+    if (currentMatchCount < 1) break;
+  }
+
+  // Place bye winners into R2
+  for (const bw of byeWinners) {
+    const r2 = ubRounds[1];
+    if (r2 && r2[bw.targetR2Index]) {
+      const m = r2[bw.targetR2Index];
+      if (!m.teamA) m.teamA = bw.team;
+      else if (!m.teamB) m.teamB = bw.team;
+    }
+  }
+
+  // Build LB — LB has roughly 2*(ubRoundCount-1) rounds
+  const ubTotalRounds = ubRounds.length;
+  const lbRounds: Match[][] = [];
+  let lbTeamCount = r1MatchCount / 2; // losers from UB R1
+  let lbRound = 1;
+
+  // LB alternates: one round of "losers drop in", one round of "internal"
+  for (let ubR = 0; ubR < ubTotalRounds - 1; ubR++) {
+    // Round where UB losers drop in and face LB winners
+    const dropInCount = Math.max(1, Math.ceil(lbTeamCount / 2));
+    const dropIn: Match[] = [];
+    for (let i = 0; i < dropInCount; i++) {
+      dropIn.push({
+        id: `L${lbRound}-${i + 1}`, round: lbRound, bracket: "lower",
+        teamA: null, teamB: null, winner: null, loser: null,
+      });
+    }
+    lbRounds.push(dropIn);
+    lbRound++;
+
+    if (dropInCount > 1) {
+      // Internal LB round
+      const internalCount = Math.ceil(dropInCount / 2);
+      const internal: Match[] = [];
+      for (let i = 0; i < internalCount; i++) {
+        internal.push({
+          id: `L${lbRound}-${i + 1}`, round: lbRound, bracket: "lower",
+          teamA: null, teamB: null, winner: null, loser: null,
+        });
+      }
+      lbRounds.push(internal);
+      lbRound++;
+    }
+
+    lbTeamCount = Math.ceil(lbTeamCount / 2);
+    if (lbTeamCount <= 1 && ubR > 0) break;
+  }
+
+  t.upperBracket = ubRounds.flat();
+  t.lowerBracket = lbRounds.flat();
   t.grandFinal = { id: "GF", round: 1, bracket: "grand-final", teamA: null, teamB: null, winner: null, loser: null };
   t.grandFinalReset = { id: "GFR", round: 2, bracket: "grand-final-reset", teamA: null, teamB: null, winner: null, loser: null };
 
   return t;
 }
 
-export function selectWinner(tournament: Tournament, matchId: string, winnerId: number): Tournament {
+// ─── Select winner with score ───
+
+export function selectWinnerWithScore(
+  tournament: Tournament, matchId: string, winnerId: number,
+  scoreA: number, scoreB: number, goldenGoal?: "a" | "b" | null
+): Tournament {
   const t = JSON.parse(JSON.stringify(tournament)) as Tournament;
   const allMatches = [...t.upperBracket, ...t.lowerBracket];
   if (t.grandFinal) allMatches.push(t.grandFinal);
@@ -228,6 +331,9 @@ export function selectWinner(tournament: Tournament, matchId: string, winnerId: 
   const loser = match.teamA.id === winnerId ? match.teamB : match.teamA;
   match.winner = winner;
   match.loser = loser;
+  match.scoreA = scoreA;
+  match.scoreB = scoreB;
+  match.goldenGoal = goldenGoal || null;
 
   const teamInList = t.teams.find(tm => tm.id === loser.id);
   if (teamInList) {
@@ -248,36 +354,140 @@ export function selectWinner(tournament: Tournament, matchId: string, winnerId: 
   };
   writeBack(matchId, match);
 
+  // Propagate — dynamic approach
+  propagateWinner(t, matchId, winner, loser);
+
+  return t;
+}
+
+// Keep legacy for compatibility
+export function selectWinner(tournament: Tournament, matchId: string, winnerId: number): Tournament {
+  return selectWinnerWithScore(tournament, matchId, winnerId, 0, 0);
+}
+
+function propagateWinner(t: Tournament, matchId: string, winner: Team, loser: Team) {
   const ub = (id: string) => t.upperBracket.find(m => m.id === id);
   const lb = (id: string) => t.lowerBracket.find(m => m.id === id);
 
-  if (matchId === "U1-1") { const u = ub("U2-1"); if (u) u.teamB = { ...winner }; const l = lb("L1-1"); if (l) l.teamA = { ...loser }; }
-  if (matchId === "U1-2") { const u = ub("U2-2"); if (u) u.teamB = { ...winner }; const l = lb("L1-1"); if (l) l.teamB = { ...loser }; }
-  if (matchId === "U1-3") { const u = ub("U2-3"); if (u) u.teamA = { ...winner }; const l = lb("L1-2"); if (l) l.teamA = { ...loser }; }
-  if (matchId === "U1-4") { const u = ub("U2-3"); if (u) u.teamB = { ...winner }; const l = lb("L1-2"); if (l) l.teamB = { ...loser }; }
+  // Parse match id
+  const ubMatch = matchId.match(/^U(\d+)-(\d+)$/);
+  const lbMatch = matchId.match(/^L(\d+)-(\d+)$/);
 
-  if (matchId === "U2-1") { const s = ub("U3-1"); if (s) s.teamA = { ...winner }; const l = lb("L2-2"); if (l) l.teamB = { ...loser }; }
-  if (matchId === "U2-2") { const f = ub("U4-1"); if (f) f.teamB = { ...winner }; const l = lb("L4-1"); if (l) l.teamB = { ...loser }; }
-  if (matchId === "U2-3") { const s = ub("U3-1"); if (s) s.teamB = { ...winner }; const l = lb("L2-1"); if (l) l.teamB = { ...loser }; }
+  if (ubMatch) {
+    const round = parseInt(ubMatch[1]);
+    const pos = parseInt(ubMatch[2]);
+    const nextRoundId = `U${round + 1}-${Math.ceil(pos / 2)}`;
+    const nextUB = ub(nextRoundId);
+    if (nextUB) {
+      if (pos % 2 === 1) nextUB.teamA = { ...winner };
+      else nextUB.teamB = { ...winner };
+    }
 
-  if (matchId === "U3-1") { const f = ub("U4-1"); if (f) f.teamA = { ...winner }; const l = lb("L5-1"); if (l) l.teamB = { ...loser }; }
-  if (matchId === "U4-1") { if (t.grandFinal) t.grandFinal.teamA = { ...winner }; const l = lb("L6-1"); if (l) l.teamB = { ...loser }; }
+    // Loser goes to lower bracket
+    // Find first LB round that has an empty slot and matches the round mapping
+    const lbRoundIndex = (round - 1) * 2; // approximate
+    const lbRoundsMap = groupByRound(t.lowerBracket);
+    const lbRoundIds = Object.keys(lbRoundsMap).map(Number).sort((a, b) => a - b);
 
-  if (matchId === "L1-1") { const l = lb("L2-1"); if (l) l.teamA = { ...winner }; }
-  if (matchId === "L1-2") { const l = lb("L2-2"); if (l) l.teamA = { ...winner }; }
-  if (matchId === "L2-1") { const l = lb("L3-1"); if (l) l.teamA = { ...winner }; }
-  if (matchId === "L2-2") { const l = lb("L3-1"); if (l) l.teamB = { ...winner }; }
-  if (matchId === "L3-1") { const l = lb("L4-1"); if (l) l.teamA = { ...winner }; }
-  if (matchId === "L4-1") { const l = lb("L5-1"); if (l) l.teamA = { ...winner }; }
-  if (matchId === "L5-1") { const l = lb("L6-1"); if (l) l.teamA = { ...winner }; }
-  if (matchId === "L6-1") { if (t.grandFinal) t.grandFinal.teamB = { ...winner }; }
+    if (lbRoundIndex < lbRoundIds.length) {
+      const targetLBRound = lbRoundsMap[lbRoundIds[lbRoundIndex]];
+      // Find slot
+      for (const m of targetLBRound) {
+        if (!m.teamA) { m.teamA = { ...loser }; break; }
+        if (!m.teamB) { m.teamB = { ...loser }; break; }
+      }
+    }
+
+    // Check if it's the UB final (last UB match)
+    const maxUBRound = Math.max(...t.upperBracket.map(m => m.round));
+    if (round === maxUBRound && t.grandFinal) {
+      t.grandFinal.teamA = { ...winner };
+      // Loser goes to LB final
+      const lastLB = t.lowerBracket[t.lowerBracket.length - 1];
+      if (lastLB && !lastLB.teamA) lastLB.teamA = { ...loser };
+      else if (lastLB && !lastLB.teamB) lastLB.teamB = { ...loser };
+    }
+  }
+
+  if (lbMatch) {
+    const round = parseInt(lbMatch[1]);
+    const pos = parseInt(lbMatch[2]);
+    // Find next LB match
+    const lbRoundsMap = groupByRound(t.lowerBracket);
+    const lbRoundIds = Object.keys(lbRoundsMap).map(Number).sort((a, b) => a - b);
+    const currentIdx = lbRoundIds.indexOf(round);
+
+    if (currentIdx < lbRoundIds.length - 1) {
+      const nextRound = lbRoundsMap[lbRoundIds[currentIdx + 1]];
+      const targetIdx = Math.floor((pos - 1) / 2);
+      const target = nextRound[Math.min(targetIdx, nextRound.length - 1)];
+      if (target) {
+        if (!target.teamA) target.teamA = { ...winner };
+        else if (!target.teamB) target.teamB = { ...winner };
+      }
+    } else {
+      // This is the LB final — winner goes to grand final
+      if (t.grandFinal) {
+        t.grandFinal.teamB = { ...winner };
+      }
+    }
+  }
 
   if (matchId === "GF") {
-    if (match.teamB?.id === winner.id) {
-      if (t.grandFinalReset) { t.grandFinalReset.teamA = { ...match.teamA! }; t.grandFinalReset.teamB = { ...match.teamB! }; }
-    } else { t.champion = winner; }
+    if (winner.id === t.grandFinal?.teamB?.id) {
+      // Lower bracket winner won — need reset
+      if (t.grandFinalReset) {
+        t.grandFinalReset.teamA = { ...t.grandFinal!.teamA! };
+        t.grandFinalReset.teamB = { ...t.grandFinal!.teamB! };
+      }
+    } else {
+      t.champion = winner;
+    }
   }
-  if (matchId === "GFR") { t.champion = winner; }
+  if (matchId === "GFR") {
+    t.champion = winner;
+  }
+}
 
-  return t;
+function groupByRound(matches: Match[]): Record<number, Match[]> {
+  const map: Record<number, Match[]> = {};
+  for (const m of matches) {
+    if (!map[m.round]) map[m.round] = [];
+    map[m.round].push(m);
+  }
+  return map;
+}
+
+// Legacy exports for compatibility
+export function generateTeams(): Team[] {
+  const TEAM_NAMES = [
+    "Pedal Fury", "Chain Breakers", "Spoke Demons", "Crank Lords", "Wheel Wolves",
+    "Saddle Sharks", "Hub Hustlers", "Gear Ghosts", "Rim Reapers", "Axle Assassins",
+  ];
+  const PLAYER_NAMES = [
+    "Lucas", "Pedro", "João", "Mateus", "Rafael", "Bruno", "Felipe", "Thiago",
+    "Gustavo", "André", "Carlos", "Diego", "Eduardo", "Fábio", "Gabriel",
+    "Henrique", "Igor", "Julio", "Kaio", "Leandro", "Marcos", "Nicolas",
+    "Otávio", "Paulo", "Renato", "Samuel", "Tiago", "Vinícius", "Wagner", "Yuri",
+  ];
+
+  function shuffle<T>(arr: T[]): T[] {
+    const a = [...arr];
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  const names = shuffle(TEAM_NAMES).slice(0, 10);
+  const players = shuffle(PLAYER_NAMES);
+  let pi = 0;
+
+  return names.map((name, i) => {
+    const count = 3 + Math.floor(Math.random() * 2);
+    const teamPlayers = players.slice(pi, pi + count).map(n => ({ name: n }));
+    pi += count;
+    return { id: i + 1, name, players: teamPlayers, losses: 0, eliminated: false, seed: i + 1 };
+  });
 }
