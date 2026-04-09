@@ -10,6 +10,7 @@ import {
   selectWinnerWithScore,
   type Tournament,
   type GroupMatch,
+  type Match,
   type StoredTeam,
   type TournamentConfig as TConfig,
 } from "@/lib/tournament";
