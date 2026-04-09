@@ -75,7 +75,7 @@ const DEMatchCard = ({ match, onSubmitResult }: DEMatchCardProps) => {
           </div>
           <p className="text-xs text-center mt-2 font-heading tracking-wider text-secondary">
             🏆 {winner.name}
-            {match.goldenGoal && <span className="ml-1 text-yellow-400">⚡ GG</span>}
+            {match.goldenGoal && <span className="ml-1 text-accent">⚡ GG</span>}
           </p>
         </>
       ) : isReady ? (
@@ -115,12 +115,12 @@ const DEMatchCard = ({ match, onSubmitResult }: DEMatchCardProps) => {
 
           {/* Golden Goal toggle */}
           <div className="mt-3 flex items-center justify-center gap-2">
-            <Zap className="w-4 h-4 text-yellow-400" />
+            <Zap className="w-4 h-4 text-accent" />
             <span className="text-xs font-heading text-muted-foreground uppercase">Golden Goal:</span>
             <button
               onClick={() => setGoldenGoal(goldenGoal === "a" ? null : "a")}
               className={`px-2 py-1 text-xs font-heading border transition-colors ${
-                goldenGoal === "a" ? "bg-yellow-400/20 border-yellow-400 text-yellow-400" : "border-border text-muted-foreground hover:border-yellow-400/50"
+                goldenGoal === "a" ? "bg-accent/20 border-accent text-accent" : "border-border text-muted-foreground hover:border-accent/50"
               }`}
             >
               {teamA!.name}
@@ -128,7 +128,7 @@ const DEMatchCard = ({ match, onSubmitResult }: DEMatchCardProps) => {
             <button
               onClick={() => setGoldenGoal(goldenGoal === "b" ? null : "b")}
               className={`px-2 py-1 text-xs font-heading border transition-colors ${
-                goldenGoal === "b" ? "bg-yellow-400/20 border-yellow-400 text-yellow-400" : "border-border text-muted-foreground hover:border-yellow-400/50"
+                goldenGoal === "b" ? "bg-accent/20 border-accent text-accent" : "border-border text-muted-foreground hover:border-accent/50"
               }`}
             >
               {teamB!.name}
