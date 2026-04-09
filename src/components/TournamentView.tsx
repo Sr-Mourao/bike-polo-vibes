@@ -8,7 +8,7 @@ const TournamentView = () => {
 
   const handleCreate = () => {
     const teams = generateTeams();
-    setTournament(initTournament(teams));
+    setTournament(initTournament(teams, { enableGroupElimination: false, eliminationCount: 2 }));
   };
 
   const handleReset = () => setTournament(null);
