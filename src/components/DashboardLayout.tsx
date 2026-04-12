@@ -27,7 +27,7 @@ function AppSidebar() {
           )}
         </div>
 
-        <SidebarGroup defaultOpen>
+        <SidebarGroup>
           <SidebarGroupLabel className="font-heading text-muted-foreground tracking-wider uppercase text-xs">
             {!collapsed && "Menu"}
           </SidebarGroupLabel>
